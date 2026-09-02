@@ -35,20 +35,27 @@ class App extends StatelessWidget {
 }
 
 class Kid {
-  Kid(this.id, this.name, this.year, {this.classId});
+  Kid(this.id, this.name, this.year, {this.classId, this.archived = false});
   final String id, name, year;
   String? classId;
+
+  /// Giocatore tolto dagli elenchi a fine stagione: non compare piu' negli
+  /// appelli, ma resta qui col suo nome, altrimenti le presenze dell'anno
+  /// prima diventerebbero righe senza nessuno.
+  bool archived;
   Map<String, dynamic> json() => {
     'id': id,
     'name': name,
     'year': year,
     'classId': classId,
+    'archived': archived,
   };
   factory Kid.from(Map<String, dynamic> v) => Kid(
     v['id'] as String,
     v['name'] as String,
     (v['year'] ?? '') as String,
     classId: v['classId'] as String?,
+    archived: (v['archived'] as bool?) ?? false,
   );
 }
 
@@ -171,7 +178,7 @@ const updateRepo = 'PanRulez/teamcheck';
 
 /// Versione di questa build. Deve restare uguale a quella in pubspec.yaml:
 /// c'e' un test che fallisce se le due si scollano.
-const appVersion = '1.5.1';
+const appVersion = '1.6.0';
 
 enum UpdateStatus { upToDate, available, failed }
 
@@ -535,7 +542,7 @@ class _CalendarPageState extends State<CalendarPage> {
       ..writeln('GIOCATORE | PRES. | ASS. | GIUST.')
       ..writeln('--------------------------------');
 
-    if (kids.isEmpty) {
+    if (activeKids.isEmpty) {
       report.writeln('Nessun giocatore inserito.');
     }
 
@@ -561,6 +568,9 @@ class _CalendarPageState extends State<CalendarPage> {
             break;
         }
       }
+      // Chi e' stato tolto dalla rosa compare solo nei mesi in cui c'era
+      // davvero: nel report di questo mese sarebbe una riga di zeri.
+      if (player.archived && presences + absences + justified == 0) continue;
       report.writeln('${player.name} | $presences | $absences | $justified');
     }
 
@@ -715,7 +725,6 @@ class _CalendarPageState extends State<CalendarPage> {
               classes = newClasses;
               kids = newKids;
               favoriteClassId = newFavoriteClassId;
-              forgetRemovedPlayers();
             });
             await save();
           },
@@ -724,16 +733,29 @@ class _CalendarPageState extends State<CalendarPage> {
     );
   }
 
-  /// Toglie presenze e convocazioni dei giocatori che non ci sono piu',
-  /// altrimenti restano nel salvataggio per sempre.
-  void forgetRemovedPlayers() {
-    final ids = kids.map((player) => player.id).toSet();
-    for (final marks in attendance.values) {
-      marks.removeWhere((id, _) => !ids.contains(id));
+  /// I giocatori in rosa: gli archiviati restano salvati ma fuori da appelli
+  /// ed elenchi.
+  List<Kid> get activeKids =>
+      kids.where((player) => !player.archived).toList();
+
+  /// Il mese piu' vecchio apribile: quello d'inizio stagione, o piu' indietro
+  /// se ci sono presenze di stagioni passate. Senza questo, dal 1° agosto le
+  /// presenze dell'anno prima sarebbero salvate ma irraggiungibili.
+  DateTime get firstBrowsableMonth {
+    var first = seasonStart;
+    void consider(String dateKey) {
+      final date = attendanceDate(dateKey);
+      if (date == null) return;
+      final month = DateTime(date.year, date.month);
+      if (month.isBefore(first)) first = month;
     }
-    for (final players in selectedPlayers.values) {
-      players.removeWhere((id) => !ids.contains(id));
-    }
+
+    attendance.keys.forEach(consider);
+    extraTrainings.keys.forEach(consider);
+    trainingChanges.keys.forEach(consider);
+    movedTraining.keys.forEach(consider);
+    movedTraining.values.forEach(consider);
+    return first;
   }
 
   Future<void> openSettings() async {
@@ -775,6 +797,16 @@ class _CalendarPageState extends State<CalendarPage> {
           name: 'Allenamento abituale',
           canManage: canManageTraining(date),
           managedTrainingId: key(date),
+        ),
+      );
+    } else if (!inSeason(date) && attendance.containsKey(key(date))) {
+      // Giorno di una stagione passata su cui c'e' un appello: si puo'
+      // riguardare, non si puo' piu' spostare o annullare.
+      sessions.add(
+        TrainingOption(
+          id: key(date),
+          name: 'Allenamento di una stagione passata',
+          canManage: false,
         ),
       );
     }
@@ -841,18 +873,19 @@ class _CalendarPageState extends State<CalendarPage> {
         session.id == key(date) &&
         favoriteClassId != null &&
         trainingDays.contains(date.weekday);
+    final roster = activeKids;
     final defaultPlayerIds = useFavoriteTeam
-        ? kids
+        ? roster
               .where((player) => player.classId == favoriteClassId)
               .map((player) => player.id)
-        : kids.map((player) => player.id);
+        : roster.map((player) => player.id);
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
         builder: (_) => DayPage(
           date: date,
           sessionName: session.name,
-          kids: kids,
+          kids: roster,
           classes: classes,
           initialPlayerIds: List.of(
             useFavoriteTeam
@@ -941,7 +974,7 @@ class _CalendarPageState extends State<CalendarPage> {
                 child: Row(
                   children: [
                     IconButton.filledTonal(
-                      onPressed: month.isAfter(seasonStart)
+                      onPressed: month.isAfter(firstBrowsableMonth)
                           ? () => setState(
                               () =>
                                   month = DateTime(month.year, month.month - 1),
@@ -2120,9 +2153,11 @@ class _ClassesPageState extends State<ClassesPage> {
         onDelete: () async {
           setState(() {
             groups.removeWhere((group) => group.id == footballClass.id);
-            players.removeWhere(
-              (player) => player.classId == footballClass.id,
-            );
+            // I giocatori si archiviano, non si cancellano: altrimenti le
+            // presenze dei mesi passati resterebbero senza un nome.
+            for (final player in players) {
+              if (player.classId == footballClass.id) player.archived = true;
+            }
             if (favoriteClassId == footballClass.id) favoriteClassId = null;
           });
           await persist();
@@ -2158,7 +2193,10 @@ class _ClassesPageState extends State<ClassesPage> {
                     itemBuilder: (_, index) {
                       final group = groups[index];
                       final count = players
-                          .where((player) => player.classId == group.id)
+                          .where(
+                            (player) =>
+                                player.classId == group.id && !player.archived,
+                          )
                           .length;
                       final isFavorite = favoriteClassId == group.id;
                       return SizedBox(
@@ -2330,10 +2368,11 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
       builder: (_) => AlertDialog(
         title: Text('Eliminare la classe ${widget.footballClass.year}?'),
         content: Text(
-          list.isEmpty
+          inRosa.isEmpty
               ? 'La classe verrà tolta dall\'elenco.'
-              : 'Verranno eliminati anche i ${list.length} giocatori della '
-                    'classe e tutte le loro presenze.',
+              : 'I ${inRosa.length} giocatori della classe verranno tolti '
+                    'dagli elenchi. Le presenze già registrate restano nei '
+                    'report dei mesi passati.',
         ),
         actions: [
           TextButton(
@@ -2391,6 +2430,81 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
     await persist();
   }
 
+  List<Kid> get inRosa => list.where((player) => !player.archived).toList();
+  List<Kid> get archiviati => list.where((player) => player.archived).toList();
+
+  /// Togliere un giocatore non lo cancella: sparisce dagli appelli ma resta
+  /// nei report dei mesi in cui c'era. A fine stagione serve esattamente
+  /// questo, e l'errore si puo' disfare.
+  Future<void> archivePlayer(Kid player) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Togliere ${player.name} dalla classe?'),
+        content: const Text(
+          'Non comparirà più negli appelli né negli elenchi.\n\n'
+          'Le presenze già registrate restano nei report dei mesi passati, e '
+          'puoi rimetterlo in rosa quando vuoi.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ANNULLA'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('TOGLI'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    setState(() => player.archived = true);
+    await persist();
+  }
+
+  Future<void> restorePlayer(Kid player) async {
+    setState(() => player.archived = false);
+    await persist();
+  }
+
+  Widget playerCard(Kid player) => Card(
+    child: ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+      leading: CircleAvatar(
+        radius: 23,
+        child: Text(player.name[0].toUpperCase()),
+      ),
+      title: Text(
+        player.name,
+        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.person_remove_outlined, size: 27),
+        tooltip: 'Togli dalla classe',
+        onPressed: () => archivePlayer(player),
+      ),
+    ),
+  );
+
+  Widget archivedCard(Kid player) => Card(
+    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+    child: ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: CircleAvatar(
+        radius: 20,
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
+        child: Text(player.name[0].toUpperCase()),
+      ),
+      title: Text(player.name, style: const TextStyle(fontSize: 16)),
+      trailing: IconButton(
+        icon: const Icon(Icons.undo, size: 26),
+        tooltip: 'Rimetti in rosa',
+        onPressed: () => restorePlayer(player),
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -2405,45 +2519,47 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
         children: [
           daysPicker(context),
           Expanded(
-            child: list.isEmpty
-                ? const Center(
+            child: ListView(
+              padding: const EdgeInsets.all(14),
+              children: [
+                if (inRosa.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
                     child: Text(
                       'Nessun giocatore in questa classe.',
+                      textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 17),
                     ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(14),
-                    itemCount: list.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 7),
-                    itemBuilder: (_, index) => Card(
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 7,
-                        ),
-                        leading: CircleAvatar(
-                          radius: 23,
-                          child: Text(list[index].name[0].toUpperCase()),
-                        ),
-                        title: Text(
-                          list[index].name,
-                          style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 27),
-                          tooltip: 'Elimina giocatore',
-                          onPressed: () async {
-                            setState(() => list.removeAt(index));
-                            await persist();
-                          },
-                        ),
-                      ),
+                  ),
+                for (final player in inRosa) ...[
+                  playerCard(player),
+                  const SizedBox(height: 7),
+                ],
+                if (archiviati.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Giocatori tolti (${archiviati.length})',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Non compaiono negli appelli, ma restano nei report dei '
+                    'mesi in cui hanno giocato. Tocca la freccia per '
+                    'rimetterli in rosa.',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  for (final player in archiviati) ...[
+                    archivedCard(player),
+                    const SizedBox(height: 7),
+                  ],
+                ],
+              ],
+            ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),

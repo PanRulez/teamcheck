@@ -76,6 +76,27 @@ void main() {
     });
   });
 
+  group('cambio di stagione', () {
+    test('un giocatore tolto resta salvato col suo nome', () {
+      final player = Kid('k1', 'Mario Rossi', '2017', classId: 'c1');
+      expect(player.archived, isFalse);
+      player.archived = true;
+      final riletto = Kid.from(player.json());
+      expect(riletto.archived, isTrue);
+      expect(riletto.name, 'Mario Rossi');
+    });
+
+    test('i giocatori salvati prima restano in rosa', () {
+      final vecchio = Kid.from({
+        'id': 'k1',
+        'name': 'Mario Rossi',
+        'year': '2017',
+        'classId': 'c1',
+      });
+      expect(vecchio.archived, isFalse);
+    });
+  });
+
   group('app', () {
     Future<void> pumpApp(WidgetTester tester) async {
       tester.view.physicalSize = const Size(1080, 2340);
@@ -201,6 +222,45 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Allena: Lun, Mar, Mer'), findsOneWidget);
+    });
+
+    testWidgets('togliere un giocatore lo archivia, e si rimette', (
+      tester,
+    ) async {
+      await pumpApp(tester);
+      await tester.tap(find.text('GESTISCI GIOCATORI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI CLASSE'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '2017');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Classe 2017'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI GIOCATORE'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Mario Rossi');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+      expect(find.text('Mario Rossi'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Togli dalla classe'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TOGLI'));
+      await tester.pumpAndSettle();
+
+      // Non sparisce: finisce fra i tolti, col nome, e si puo' rimettere.
+      expect(find.text('Giocatori tolti (1)'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Mario Rossi'),
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('Mario Rossi'), findsOneWidget);
+      await tester.tap(find.byTooltip('Rimetti in rosa'));
+      await tester.pumpAndSettle();
+      expect(find.text('Giocatori tolti (1)'), findsNothing);
+      expect(find.byTooltip('Togli dalla classe'), findsOneWidget);
     });
 
     testWidgets('l’appello di oggi è disponibile', (tester) async {
