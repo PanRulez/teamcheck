@@ -72,23 +72,43 @@ String daysLabel(Set<int> days) {
   return sorted.map((day) => shortDayNames[day - 1]).join(', ');
 }
 
+/// Come si scrive una classe: "2017" diventa "Classe 2017", mentre un gruppo
+/// che non e' un'annata - prima squadra, eccellenza - si scrive com'e'.
+String classLabel(String name) {
+  final clean = name.trim();
+  return isBirthYear(clean) ? 'Classe $clean' : clean;
+}
+
+/// Una classe e' un'annata quando si chiama con un anno di nascita.
+bool isBirthYear(String name) =>
+    RegExp(r'^(19|20)\d\d$').hasMatch(name.trim());
+
+/// L'anno di nascita che si puo' dare per scontato entrando in questa classe:
+/// nessuno, se il gruppo mescola le eta'.
+String birthYearOf(FootballClass footballClass) =>
+    isBirthYear(footballClass.name) ? footballClass.name.trim() : '';
+
 class FootballClass {
-  FootballClass(this.id, this.year, {Set<int>? days})
+  FootballClass(this.id, this.name, {Set<int>? days})
     : days = {...(days ?? defaultTrainingDays)};
   final String id;
-  final String year;
+
+  /// Anno di nascita ("2017") oppure il nome del gruppo ("Prima squadra"):
+  /// non tutte le squadre sono annate.
+  final String name;
 
   /// Giorni della settimana (lunedi' = 1) in cui questa classe si allena:
   /// sono suoi, un'altra classe puo' allenarsi martedi' e giovedi'.
   Set<int> days;
   Map<String, dynamic> json() => {
     'id': id,
-    'year': year,
+    'name': name,
     'days': days.toList()..sort(),
   };
   factory FootballClass.from(Map<String, dynamic> value) => FootballClass(
     value['id'] as String,
-    value['year'] as String,
+    // Prima il nome si chiamava "year" perche' era per forza un'annata.
+    (value['name'] ?? value['year']) as String,
     // Le classi salvate prima che i giorni esistessero tengono lunedi' e
     // mercoledi', cosi' sul telefono di babbo non cambia niente.
     days: (value['days'] as List?)?.map((day) => day as int).toSet(),
@@ -101,12 +121,19 @@ enum Mark { present, absent, justified }
 enum ImportResult { done, cancelled, notABackup, damaged }
 
 class ExtraTraining {
-  ExtraTraining(this.id, this.name);
+  ExtraTraining(this.id, this.name, {this.classId});
   final String id;
   final String name;
-  Map<String, dynamic> json() => {'id': id, 'name': name};
-  factory ExtraTraining.from(Map<String, dynamic> value) =>
-      ExtraTraining(value['id'] as String, value['name'] as String);
+
+  /// La classe a cui e' rivolto, se e' stata scelta: l'appello parte con i
+  /// suoi giocatori invece che con tutti.
+  final String? classId;
+  Map<String, dynamic> json() => {'id': id, 'name': name, 'classId': classId};
+  factory ExtraTraining.from(Map<String, dynamic> value) => ExtraTraining(
+    value['id'] as String,
+    value['name'] as String,
+    classId: value['classId'] as String?,
+  );
 }
 
 class TrainingOption {
@@ -115,10 +142,14 @@ class TrainingOption {
     required this.name,
     required this.canManage,
     this.managedTrainingId,
+    this.classId,
   });
   final String id;
   final String name;
   final bool canManage;
+
+  /// Classe a cui e' rivolta la sessione, quando e' stata scelta.
+  final String? classId;
   /// Identifica l'allenamento originale quando la sessione e' stata spostata.
   final String? managedTrainingId;
 }
@@ -178,7 +209,7 @@ const updateRepo = 'PanRulez/teamcheck';
 
 /// Versione di questa build. Deve restare uguale a quella in pubspec.yaml:
 /// c'e' un test che fallisce se le due si scollano.
-const appVersion = '1.7.0';
+const appVersion = '1.8.0';
 
 enum UpdateStatus { upToDate, available, failed }
 
@@ -349,7 +380,7 @@ class _CalendarPageState extends State<CalendarPage> {
   Future<void> addTestData() async {
     for (final year in ['2017', '2018', '2019']) {
       final footballClass = classes.firstWhere(
-        (group) => group.year == year,
+        (group) => group.name == year,
         orElse: () {
           final group = FootballClass('test-class-$year', year);
           classes.add(group);
@@ -465,7 +496,7 @@ class _CalendarPageState extends State<CalendarPage> {
       final year = player.year.isEmpty ? 'Classe principale' : player.year;
       FootballClass? existing;
       for (final group in classes) {
-        if (group.year == year) {
+        if (group.name == year) {
           existing = group;
           break;
         }
@@ -831,16 +862,22 @@ class _CalendarPageState extends State<CalendarPage> {
           name: extra.name,
           canManage: true,
           managedTrainingId: extra.id,
+          classId: extra.classId,
         ),
       );
     }
     return sessions;
   }
 
-  Future<TrainingOption> addExtraTraining(DateTime date, String name) async {
+  Future<TrainingOption> addExtraTraining(
+    DateTime date,
+    String name,
+    String? classId,
+  ) async {
     final session = ExtraTraining(
       'extra-${DateTime.now().microsecondsSinceEpoch}',
       name.trim().isEmpty ? 'Allenamento aggiuntivo' : name.trim(),
+      classId: classId,
     );
     setState(
       () => extraTrainings.putIfAbsent(key(date), () => []).add(session),
@@ -851,6 +888,7 @@ class _CalendarPageState extends State<CalendarPage> {
       name: session.name,
       canManage: true,
       managedTrainingId: session.id,
+      classId: session.classId,
     );
   }
 
@@ -859,7 +897,9 @@ class _CalendarPageState extends State<CalendarPage> {
     final player = Kid(
       DateTime.now().microsecondsSinceEpoch.toString(),
       name.trim(),
-      footballClass.year,
+      // L'anno di nascita si sa solo se la classe e' un'annata: in un gruppo
+      // come la prima squadra le eta' sono mescolate.
+      birthYearOf(footballClass),
       classId: footballClass.id,
     );
     setState(() => kids.add(player));
@@ -868,15 +908,18 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   Future<void> openRollCall(DateTime date, TrainingOption session) async {
-    // Nei giorni della sua classe l'appello si apre gia' con i suoi giocatori.
+    // Se l'allenamento e' stato creato per una classe, l'appello parte con
+    // quella; se no, nei giorni della sua classe parte con la sua.
     final useFavoriteTeam =
+        session.classId == null &&
         session.id == key(date) &&
         favoriteClassId != null &&
         trainingDays.contains(date.weekday);
+    final sessionClassId = session.classId ?? favoriteClassId;
     final roster = activeKids;
-    final defaultPlayerIds = useFavoriteTeam
+    final defaultPlayerIds = (session.classId != null || useFavoriteTeam)
         ? roster
-              .where((player) => player.classId == favoriteClassId)
+              .where((player) => player.classId == sessionClassId)
               .map((player) => player.id)
         : roster.map((player) => player.id);
     await Navigator.push<void>(
@@ -914,7 +957,8 @@ class _CalendarPageState extends State<CalendarPage> {
       builder: (_) => DaySchedulePage(
         date: date,
         sessions: sessionsFor(date),
-        onAdd: (name) => addExtraTraining(date, name),
+        classes: classes,
+        onAdd: (name, classId) => addExtraTraining(date, name, classId),
         onOpen: (session) => openRollCall(date, session),
         onManage: (session) => manageTraining(
           date,
@@ -1541,6 +1585,7 @@ class DaySchedulePage extends StatefulWidget {
     super.key,
     required this.date,
     required this.sessions,
+    required this.classes,
     required this.onAdd,
     required this.onOpen,
     required this.onManage,
@@ -1548,7 +1593,8 @@ class DaySchedulePage extends StatefulWidget {
   });
   final DateTime date;
   final List<TrainingOption> sessions;
-  final Future<TrainingOption> Function(String name) onAdd;
+  final List<FootballClass> classes;
+  final Future<TrainingOption> Function(String name, String? classId) onAdd;
   final Future<void> Function(TrainingOption session) onOpen;
   final Future<void> Function(TrainingOption session) onManage;
 
@@ -1575,35 +1621,88 @@ class _DaySchedulePageState extends State<DaySchedulePage> {
   ).isAfter(DateUtils.dateOnly(DateTime.now()));
   bool get isToday => DateUtils.isSameDay(widget.date, DateTime.now());
 
+  /// Si sceglie da un elenco delle classi che esistono, cosi' il nome non si
+  /// scrive due volte in due modi diversi. Resta la strada libera per quello
+  /// che una classe non e': un'amichevole, un recupero.
   Future<void> addTraining() async {
-    final name = TextEditingController();
-    final add = await showDialog<bool>(
+    final scelta = await showDialog<String>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Aggiungi allenamento'),
-        content: TextField(
-          controller: name,
-          autofocus: true,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            labelText: 'Gruppo o descrizione (facoltativo)',
-            hintText: 'Es. Classe 2017',
+      builder: (_) => SimpleDialog(
+        title: const Text('Per chi è questo allenamento?'),
+        children: [
+          for (final group in widget.classes)
+            ListTile(
+              leading: const Icon(Icons.groups, size: 28),
+              title: Text(
+                classLabel(group.name),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              onTap: () => Navigator.pop(context, group.id),
+            ),
+          ListTile(
+            leading: const Icon(Icons.edit_outlined, size: 28),
+            title: const Text(
+              'Altro',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text('Scrivi tu di che si tratta'),
+            onTap: () => Navigator.pop(context, 'altro'),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('ANNULLA'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('AGGIUNGI'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('ANNULLA'),
+              ),
+            ),
           ),
         ],
       ),
     );
-    if (add != true) return;
-    final session = await widget.onAdd(name.text);
+    if (scelta == null || !mounted) return;
+
+    String? name;
+    String? classId;
+    if (scelta == 'altro') {
+      final testo = TextEditingController();
+      final add = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Aggiungi allenamento'),
+          content: TextField(
+            controller: testo,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Descrizione',
+              hintText: 'Es. Amichevole, recupero',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('ANNULLA'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('AGGIUNGI'),
+            ),
+          ],
+        ),
+      );
+      if (add != true) return;
+      name = testo.text;
+    } else {
+      classId = scelta;
+      final group = widget.classes.firstWhere((item) => item.id == scelta);
+      name = classLabel(group.name);
+    }
+    final session = await widget.onAdd(name, classId);
     if (mounted) setState(() => sessions.add(session));
   }
 
@@ -1820,7 +1919,7 @@ class _DayPageState extends State<DayPage> {
                 .map(
                   (group) => ListTile(
                     leading: const Icon(Icons.groups),
-                    title: Text('Classe ${group.year}'),
+                    title: Text(classLabel(group.name)),
                     subtitle: Text('${missingFrom(group)} da aggiungere'),
                     onTap: () => Navigator.pop(context, group.id),
                   ),
@@ -1847,7 +1946,7 @@ class _DayPageState extends State<DayPage> {
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text('Altri giocatori · Classe ${group.year}'),
+          title: Text('Altri giocatori · ${classLabel(group.name)}'),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView(
@@ -1939,7 +2038,7 @@ class _DayPageState extends State<DayPage> {
                     .map(
                       (group) => DropdownMenuItem(
                         value: group.id,
-                        child: Text('Classe ${group.year}'),
+                        child: Text(classLabel(group.name)),
                       ),
                     )
                     .toList(),
@@ -2153,7 +2252,9 @@ class _ClassesPageState extends State<ClassesPage> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Classe ${footballClass.year} scelta come squadra preferita.'),
+          content: Text(
+            '${classLabel(footballClass.name)} scelta come squadra preferita.',
+          ),
         ),
       );
     }
@@ -2168,10 +2269,10 @@ class _ClassesPageState extends State<ClassesPage> {
         content: TextField(
           controller: year,
           autofocus: true,
-          keyboardType: TextInputType.number,
+          textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
-            labelText: 'Anno di nascita',
-            hintText: 'Es. 2017',
+            labelText: 'Anno di nascita o nome del gruppo',
+            hintText: 'Es. 2017, oppure Prima squadra',
           ),
         ),
         actions: [
@@ -2189,7 +2290,9 @@ class _ClassesPageState extends State<ClassesPage> {
     final value = year.text.trim();
     if (add != true ||
         value.isEmpty ||
-        groups.any((group) => group.year == value)) {
+        groups.any(
+          (group) => group.name.toLowerCase() == value.toLowerCase(),
+        )) {
       return;
     }
     setState(
@@ -2292,7 +2395,7 @@ class _ClassesPageState extends State<ClassesPage> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Classe ${group.year}',
+                                      classLabel(group.name),
                                       style: const TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.bold,
@@ -2443,7 +2546,7 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('Eliminare la classe ${widget.footballClass.year}?'),
+        title: Text('Eliminare ${classLabel(widget.footballClass.name)}?'),
         content: Text(
           inRosa.isEmpty
               ? 'La classe verrà tolta dall\'elenco.'
@@ -2471,15 +2574,34 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
 
   Future<void> addPlayer() async {
     final name = TextEditingController();
+    // In un'annata l'anno di nascita e' quello della classe; in un gruppo a
+    // eta' mescolate va chiesto, e resta facoltativo.
+    final birthYear = TextEditingController(
+      text: birthYearOf(widget.footballClass),
+    );
     final add = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Aggiungi giocatore'),
-        content: TextField(
-          controller: name,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(labelText: 'Nome e cognome'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: name,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Nome e cognome'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: birthYear,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Anno di nascita (facoltativo)',
+                hintText: 'Es. 2017',
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -2499,7 +2621,7 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
         Kid(
           DateTime.now().microsecondsSinceEpoch.toString(),
           name.text.trim(),
-          widget.footballClass.year,
+          birthYear.text.trim(),
           classId: widget.footballClass.id,
         ),
       ),
@@ -2589,7 +2711,7 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
       automaticallyImplyLeading: false,
       leadingWidth: 190,
       leading: const ReturnButton(destination: 'CLASSI'),
-      title: Text('Classe ${widget.footballClass.year}'),
+      title: Text(classLabel(widget.footballClass.name)),
     ),
     body: SafeArea(
       child: Column(

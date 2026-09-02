@@ -97,6 +97,29 @@ void main() {
     });
   });
 
+  group('classi non per età', () {
+    test('un gruppo si scrive col suo nome, un’annata con "Classe"', () {
+      expect(classLabel('2017'), 'Classe 2017');
+      expect(classLabel(' 2018 '), 'Classe 2018');
+      expect(classLabel('Prima squadra'), 'Prima squadra');
+      expect(classLabel('Eccellenza'), 'Eccellenza');
+    });
+
+    test('l’anno di nascita si deduce solo dalle annate', () {
+      expect(birthYearOf(FootballClass('c1', '2017')), '2017');
+      expect(birthYearOf(FootballClass('c2', 'Prima squadra')), '');
+      // 17 non e' un anno di nascita: e' il nome di un gruppo.
+      expect(isBirthYear('17'), isFalse);
+      expect(isBirthYear('2017'), isTrue);
+    });
+
+    test('le classi salvate come "year" si rileggono', () {
+      final vecchia = FootballClass.from({'id': 'c1', 'year': 'Juniores'});
+      expect(vecchia.name, 'Juniores');
+      expect(FootballClass.from(vecchia.json()).name, 'Juniores');
+    });
+  });
+
   group('app', () {
     Future<void> pumpApp(WidgetTester tester) async {
       tester.view.physicalSize = const Size(1080, 2340);
@@ -239,7 +262,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('AGGIUNGI GIOCATORE'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField), 'Mario Rossi');
+      await tester.enterText(find.byType(TextField).first, 'Mario Rossi');
       await tester.tap(find.text('AGGIUNGI'));
       await tester.pumpAndSettle();
       expect(find.text('Mario Rossi'), findsOneWidget);
@@ -276,7 +299,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('AGGIUNGI GIOCATORE'));
         await tester.pumpAndSettle();
-        await tester.enterText(find.byType(TextField), giocatore);
+        await tester.enterText(find.byType(TextField).first, giocatore);
         await tester.tap(find.text('AGGIUNGI'));
         await tester.pumpAndSettle();
       }
@@ -344,6 +367,47 @@ void main() {
       expect(find.text('Marco Verdi'), findsOneWidget);
     });
 
+    testWidgets('un allenamento si crea scegliendo la classe', (tester) async {
+      await pumpApp(tester);
+      await tester.tap(find.text('GESTISCI GIOCATORI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI CLASSE'));
+      await tester.pumpAndSettle();
+      // Un gruppo che non è un'annata: età mescolate.
+      await tester.enterText(find.byType(TextField), 'Prima squadra');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+      expect(find.text('Prima squadra'), findsOneWidget);
+
+      await tester.tap(find.text('Prima squadra'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI GIOCATORE'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).first, 'Gino Rossi');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TORNA A CLASSI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TORNA A CALENDARIO'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('ALLENAMENTO DI OGGI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI ALLENAMENTO'));
+      await tester.pumpAndSettle();
+      // Le classi che esistono si scelgono da qui, senza riscriverne il nome.
+      expect(find.text('Prima squadra'), findsOneWidget);
+      await tester.tap(find.text('Prima squadra'));
+      await tester.pumpAndSettle();
+
+      // La sessione prende il nome della classe...
+      expect(find.text('Prima squadra'), findsOneWidget);
+      await tester.tap(find.text('Prima squadra'));
+      await tester.pumpAndSettle();
+      // ...e il suo appello parte con i giocatori di quella classe.
+      expect(find.text('Gino Rossi'), findsOneWidget);
+    });
+
     testWidgets('l’appello di oggi è disponibile', (tester) async {
       await pumpApp(tester);
       await tester.tap(find.text('ALLENAMENTO DI OGGI'));
@@ -362,6 +426,8 @@ void main() {
       await tester.tap(find.text('ALLENAMENTO DI OGGI'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('AGGIUNGI ALLENAMENTO'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Altro'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Porte aperte');
       await tester.tap(find.text('AGGIUNGI'));
@@ -394,6 +460,8 @@ void main() {
       // Un allenamento aggiunto a mano esiste in qualsiasi giorno della
       // settimana, cosi' il test non dipende da quando viene eseguito.
       await tester.tap(find.text('AGGIUNGI ALLENAMENTO'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Altro'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Allenamento di prova');
       await tester.tap(find.text('AGGIUNGI'));
