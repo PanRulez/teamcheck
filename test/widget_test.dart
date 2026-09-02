@@ -186,6 +186,37 @@ void main() {
       expect(find.text('AGGIUNGI ALLENAMENTO'), findsOneWidget);
     });
 
+    testWidgets('un allenamento aggiunto si gestisce e si elimina', (
+      tester,
+    ) async {
+      await pumpApp(tester);
+      await tester.tap(find.text('ALLENAMENTO DI OGGI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI ALLENAMENTO'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Porte aperte');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+      expect(find.text('Porte aperte'), findsOneWidget);
+
+      // Gli allenamenti aggiunti finiscono in fondo all'elenco.
+      await tester.tap(find.text('GESTISCI').last);
+      await tester.pumpAndSettle();
+      // Uno aggiunto a mano si sposta o si elimina: "annullare" non ha senso.
+      expect(find.text('SPOSTA ALLENAMENTO'), findsOneWidget);
+      expect(find.text('ELIMINA ALLENAMENTO'), findsOneWidget);
+      expect(find.text('ANNULLA ALLENAMENTO'), findsNothing);
+
+      await tester.tap(find.text('ELIMINA ALLENAMENTO'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ELIMINA'));
+      await tester.pumpAndSettle();
+
+      // Tornati al giorno, l'elenco si e' riletto e la sessione non c'e' piu'.
+      expect(find.text('Porte aperte'), findsNothing);
+      expect(find.text('AGGIUNGI ALLENAMENTO'), findsOneWidget);
+    });
+
     testWidgets('l’appello non ripete il tasto gestisci', (tester) async {
       await pumpApp(tester);
       await tester.tap(find.text('ALLENAMENTO DI OGGI'));

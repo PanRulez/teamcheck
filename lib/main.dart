@@ -171,7 +171,7 @@ const updateRepo = 'PanRulez/teamcheck';
 
 /// Versione di questa build. Deve restare uguale a quella in pubspec.yaml:
 /// c'e' un test che fallisce se le due si scollano.
-const appVersion = '1.4.1';
+const appVersion = '1.5.0';
 
 enum UpdateStatus { upToDate, available, failed }
 
@@ -635,13 +635,52 @@ class _CalendarPageState extends State<CalendarPage> {
       isMoved(day) ||
       movedTraining.containsValue(key(day));
 
+  /// L'allenamento aggiunto a mano con quell'id, se esiste.
+  ExtraTraining? extraSession(String id) {
+    for (final sessions in extraTrainings.values) {
+      for (final session in sessions) {
+        if (session.id == id) return session;
+      }
+    }
+    return null;
+  }
+
+  /// Sposta un allenamento aggiunto a mano: cambia solo la lista del giorno
+  /// in cui sta, l'id non cambia e quindi le presenze lo seguono.
+  Future<void> moveExtraTraining(String id, DateTime from, DateTime to) async {
+    final source = extraTrainings[key(from)];
+    if (source == null) return;
+    final index = source.indexWhere((session) => session.id == id);
+    if (index < 0) return;
+    final session = source.removeAt(index);
+    setState(() {
+      if (source.isEmpty) extraTrainings.remove(key(from));
+      extraTrainings.putIfAbsent(key(to), () => []).add(session);
+    });
+    await save();
+  }
+
+  Future<void> deleteExtraTraining(String id, DateTime from) async {
+    setState(() {
+      final source = extraTrainings[key(from)];
+      source?.removeWhere((session) => session.id == id);
+      if (source != null && source.isEmpty) extraTrainings.remove(key(from));
+      attendance.remove(id);
+      selectedPlayers.remove(id);
+    });
+    await save();
+  }
+
   Future<void> manageTraining(DateTime date, {String? trainingId}) async {
+    final id = trainingId ?? key(date);
+    final extra = extraSession(id);
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => TrainingPage(
           date: date,
-          trainingId: trainingId ?? key(date),
+          trainingId: id,
+          extraName: extra?.name,
           changes: Map.of(trainingChanges),
           moves: Map.of(movedTraining),
           onChanged: (changes, moves) async {
@@ -651,6 +690,12 @@ class _CalendarPageState extends State<CalendarPage> {
             });
             await save();
           },
+          onMoveExtra: extra == null
+              ? null
+              : (newDate) => moveExtraTraining(id, date, newDate),
+          onDeleteExtra: extra == null
+              ? null
+              : () => deleteExtraTraining(id, date),
         ),
       ),
     );
@@ -748,7 +793,12 @@ class _CalendarPageState extends State<CalendarPage> {
     }
     for (final extra in extraTrainings[key(date)] ?? const <ExtraTraining>[]) {
       sessions.add(
-        TrainingOption(id: extra.id, name: extra.name, canManage: false),
+        TrainingOption(
+          id: extra.id,
+          name: extra.name,
+          canManage: true,
+          managedTrainingId: extra.id,
+        ),
       );
     }
     return sessions;
@@ -763,7 +813,12 @@ class _CalendarPageState extends State<CalendarPage> {
       () => extraTrainings.putIfAbsent(key(date), () => []).add(session),
     );
     await save();
-    return TrainingOption(id: session.id, name: session.name, canManage: false);
+    return TrainingOption(
+      id: session.id,
+      name: session.name,
+      canManage: true,
+      managedTrainingId: session.id,
+    );
   }
 
   Future<Kid> addPlayerForRollCall(String name, String classId) async {
@@ -830,6 +885,7 @@ class _CalendarPageState extends State<CalendarPage> {
           date,
           trainingId: session.managedTrainingId,
         ),
+        onRefresh: () => sessionsFor(date),
       ),
     ),
   );
@@ -1132,12 +1188,23 @@ class TrainingPage extends StatefulWidget {
     required this.changes,
     required this.moves,
     required this.onChanged,
+    this.extraName,
+    this.onMoveExtra,
+    this.onDeleteExtra,
   });
   final DateTime date;
   final String trainingId;
   final Map<String, bool> changes;
   final Map<String, String> moves;
   final Future<void> Function(Map<String, bool>, Map<String, String>) onChanged;
+
+  /// Valorizzato solo per gli allenamenti aggiunti a mano: quelli si
+  /// spostano cambiando giorno e si eliminano, non si "annullano".
+  final String? extraName;
+  final Future<void> Function(DateTime newDate)? onMoveExtra;
+  final Future<void> Function()? onDeleteExtra;
+  bool get isExtra => extraName != null;
+
   @override
   State<TrainingPage> createState() => _TrainingPageState();
 }
@@ -1189,6 +1256,50 @@ class _TrainingPageState extends State<TrainingPage> {
     }
   }
 
+  /// Sposta un allenamento aggiunto a mano e torna al giorno: da qui in poi
+  /// quella sessione non sta piu' su questa data.
+  Future<void> moveExtra() async {
+    final newDate = await pick('Scegli la nuova data');
+    if (newDate == null) return;
+    await widget.onMoveExtra!(newDate);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Allenamento spostato dal ${label(widget.date)} al ${label(newDate)}',
+        ),
+      ),
+    );
+    Navigator.pop(context);
+  }
+
+  Future<void> deleteExtra() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Eliminare questo allenamento?'),
+        content: Text(
+          'Sparisce dal ${label(widget.date)} insieme all\'appello che hai '
+          'già fatto per lui. Gli altri allenamenti del giorno restano.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ANNULLA'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('ELIMINA'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await widget.onDeleteExtra!();
+    if (mounted) Navigator.pop(context);
+  }
+
   Future<void> moveTraining() async {
     final newDate = await pick('Scegli la nuova data');
     if (newDate == null) return;
@@ -1227,15 +1338,16 @@ class _TrainingPageState extends State<TrainingPage> {
             Card(
               color: const Color(0xffd9f3df),
               child: Padding(
-                padding: EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
-                    Icon(Icons.sports_soccer, size: 32),
-                    SizedBox(width: 12),
+                    const Icon(Icons.sports_soccer, size: 32),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Allenamento del ${label(widget.date)}',
-                        style: TextStyle(
+                        widget.extraName ??
+                            'Allenamento del ${label(widget.date)}',
+                        style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
                         ),
@@ -1245,41 +1357,62 @@ class _TrainingPageState extends State<TrainingPage> {
                 ),
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
               child: Text(
-                'Qui modifichi solo questo allenamento.',
+                widget.isExtra
+                    ? 'Allenamento aggiunto da te il ${label(widget.date)}.'
+                    : 'Qui modifichi solo questo allenamento.',
                 textAlign: TextAlign.center,
               ),
             ),
-            if (isMovedTraining || isCancelledTraining) ...[
+            if (widget.isExtra) ...[
               _actionButton(
                 context,
-                Icons.restore,
-                'RIPRISTINA ALLENAMENTO',
-                isMovedTraining
-                    ? 'Tornerà alla data originale'
-                    : 'Tornerà nel calendario',
-                restoreTraining,
+                Icons.swap_horiz,
+                'SPOSTA ALLENAMENTO',
+                'Scegli la nuova data',
+                moveExtra,
               ),
               const SizedBox(height: 12),
+              _actionButton(
+                context,
+                Icons.delete_outline,
+                'ELIMINA ALLENAMENTO',
+                'Lo toglie dal giorno, con il suo appello',
+                deleteExtra,
+                danger: true,
+              ),
+            ] else ...[
+              if (isMovedTraining || isCancelledTraining) ...[
+                _actionButton(
+                  context,
+                  Icons.restore,
+                  'RIPRISTINA ALLENAMENTO',
+                  isMovedTraining
+                      ? 'Tornerà alla data originale'
+                      : 'Tornerà nel calendario',
+                  restoreTraining,
+                ),
+                const SizedBox(height: 12),
+              ],
+              _actionButton(
+                context,
+                Icons.swap_horiz,
+                'SPOSTA ALLENAMENTO',
+                'Scegli la nuova data',
+                moveTraining,
+              ),
+              const SizedBox(height: 12),
+              _actionButton(
+                context,
+                Icons.cancel_outlined,
+                'ANNULLA ALLENAMENTO',
+                'Sarà segnato in rosso sul calendario',
+                cancelTraining,
+                danger: true,
+              ),
             ],
-            _actionButton(
-              context,
-              Icons.swap_horiz,
-              'SPOSTA ALLENAMENTO',
-              'Scegli la nuova data',
-              moveTraining,
-            ),
-            const SizedBox(height: 12),
-            _actionButton(
-              context,
-              Icons.cancel_outlined,
-              'ANNULLA ALLENAMENTO',
-              'Sarà segnato in rosso sul calendario',
-              cancelTraining,
-              danger: true,
-            ),
             const Spacer(),
             Text(
               'Le modifiche vengono salvate automaticamente.',
@@ -1312,6 +1445,8 @@ class _TrainingPageState extends State<TrainingPage> {
         children: [
           Text(
             title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
@@ -1320,6 +1455,8 @@ class _TrainingPageState extends State<TrainingPage> {
           ),
           Text(
             subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 12,
               color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1343,6 +1480,7 @@ class DaySchedulePage extends StatefulWidget {
     required this.onAdd,
     required this.onOpen,
     required this.onManage,
+    required this.onRefresh,
   });
   final DateTime date;
   final List<TrainingOption> sessions;
@@ -1350,12 +1488,22 @@ class DaySchedulePage extends StatefulWidget {
   final Future<void> Function(TrainingOption session) onOpen;
   final Future<void> Function(TrainingOption session) onManage;
 
+  /// Rilegge gli allenamenti del giorno: dopo uno spostamento o una
+  /// cancellazione l'elenco qui sotto sarebbe rimasto quello di prima.
+  final List<TrainingOption> Function() onRefresh;
+
   @override
   State<DaySchedulePage> createState() => _DaySchedulePageState();
 }
 
 class _DaySchedulePageState extends State<DaySchedulePage> {
   late List<TrainingOption> sessions = List.of(widget.sessions);
+
+  Future<void> manage(TrainingOption session) async {
+    await widget.onManage(session);
+    if (mounted) setState(() => sessions = widget.onRefresh());
+  }
+
   /// L'appello si fa il giorno stesso o piu' tardi: se babbo se ne dimentica
   /// deve poterlo recuperare. Sui giorni futuri invece non ha senso.
   bool get canTakeRollCall => !DateUtils.dateOnly(
@@ -1435,89 +1583,86 @@ class _DaySchedulePageState extends State<DaySchedulePage> {
                     )
                   : ListView.separated(
                       itemCount: sessions.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 22),
+                      separatorBuilder: (_, _) => const SizedBox(height: 14),
                       itemBuilder: (_, index) {
                         final session = sessions[index];
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            SizedBox(
-                              height: 80,
-                              child: FilledButton.icon(
-                                onPressed: canTakeRollCall
-                                    ? () => widget.onOpen(session)
-                                    : null,
-                                icon: const Icon(Icons.how_to_reg, size: 31),
-                                label: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      session.name,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(
-                                      canTakeRollCall
-                                          ? 'APRI APPELLO'
-                                          : 'APPELLO NON ANCORA DISPONIBILE',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                                style: FilledButton.styleFrom(
-                                  alignment: Alignment.centerLeft,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 18,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            // Il tasto per spostare o annullare sta qui, scritto
-                            // per esteso: prima era solo un ingranaggio, ed era
-                            // ripetuto anche dentro l'appello.
-                            if (session.canManage) ...[
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                height: 68,
-                                child: OutlinedButton.icon(
-                                  onPressed: () => widget.onManage(session),
-                                  icon: const Icon(Icons.settings, size: 29),
-                                  label: const Column(
+                        // Appello e gestione affiancati: ogni allenamento si
+                        // porta accanto il suo tasto, cosi' non c'e' dubbio su
+                        // quale allenamento si sta gestendo.
+                        return SizedBox(
+                          height: 88,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  onPressed: canTakeRollCall
+                                      ? () => widget.onOpen(session)
+                                      : null,
+                                  icon: const Icon(Icons.how_to_reg, size: 29),
+                                  label: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        'GESTISCI ALLENAMENTO',
-                                        style: TextStyle(
+                                        session.name,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
                                           fontSize: 16,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
                                       Text(
-                                        'Spostalo o annullalo',
+                                        canTakeRollCall
+                                            ? 'APRI APPELLO'
+                                            : 'NON ANCORA DISPONIBILE',
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(fontSize: 13),
+                                        style: const TextStyle(fontSize: 13),
                                       ),
                                     ],
                                   ),
-                                  style: OutlinedButton.styleFrom(
+                                  style: FilledButton.styleFrom(
                                     alignment: Alignment.centerLeft,
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 18,
+                                      horizontal: 14,
                                     ),
                                   ),
                                 ),
                               ),
+                              if (session.canManage) ...[
+                                const SizedBox(width: 8),
+                                SizedBox(
+                                  width: 108,
+                                  child: OutlinedButton(
+                                    onPressed: () => manage(session),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                      ),
+                                    ),
+                                    child: const Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.settings, size: 28),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          'GESTISCI',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
-                          ],
+                          ),
                         );
                       },
                     ),
