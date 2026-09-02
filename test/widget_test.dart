@@ -263,6 +263,87 @@ void main() {
       expect(find.byTooltip('Togli dalla classe'), findsOneWidget);
     });
 
+    testWidgets('i giocatori aggiunti all’appello partono presenti', (
+      tester,
+    ) async {
+      Future<void> creaClasse(String anno, String giocatore) async {
+        await tester.tap(find.text('AGGIUNGI CLASSE'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), anno);
+        await tester.tap(find.text('AGGIUNGI'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Classe $anno'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('AGGIUNGI GIOCATORE'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), giocatore);
+        await tester.tap(find.text('AGGIUNGI'));
+        await tester.pumpAndSettle();
+      }
+
+      await pumpApp(tester);
+      await tester.tap(find.text('GESTISCI GIOCATORI'));
+      await tester.pumpAndSettle();
+
+      // La 2017 prende la stella perche' e' la prima.
+      await creaClasse('2017', 'Marco Verdi');
+      // Il test deve valere in qualsiasi giorno della settimana: si assicura
+      // che la classe di casa si alleni oggi.
+      final oggi = shortDayNames[DateTime.now().weekday - 1];
+      final casella = find.widgetWithText(FilterChip, oggi);
+      if (!tester.widget<FilterChip>(casella).selected) {
+        await tester.tap(casella);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.text('TORNA A CLASSI'));
+      await tester.pumpAndSettle();
+      await creaClasse('2018', 'Luca Bianchi');
+      await tester.tap(find.text('TORNA A CLASSI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TORNA A CALENDARIO'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('ALLENAMENTO DI OGGI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Allenamento abituale'));
+      await tester.pumpAndSettle();
+      // L'appello parte con la sua classe.
+      expect(find.text('Marco Verdi'), findsOneWidget);
+
+      await tester.tap(find.text('ALTRI GIOCATORI'));
+      await tester.pumpAndSettle();
+      // La classe con cui sta gia' lavorando non viene riproposta.
+      expect(find.text('Classe 2017'), findsNothing);
+      await tester.tap(find.text('Classe 2018'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Luca Bianchi'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('CONFERMA'));
+      await tester.pumpAndSettle();
+
+      // Aggiunto significa venuto: parte gia' segnato presente.
+      expect(find.text('Luca Bianchi'), findsOneWidget);
+      expect(find.text('Presente'), findsOneWidget);
+      expect(find.text('Aggiunto a questo appello'), findsOneWidget);
+
+      // E se e' un errore, si toglie senza lasciare il segno in giro.
+      await tester.tap(
+        find.descendant(
+          of: find
+              .ancestor(
+                of: find.text('Luca Bianchi'),
+                matching: find.byType(Card),
+              )
+              .first,
+          matching: find.byTooltip('Togli da questo appello'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Luca Bianchi'), findsNothing);
+      expect(find.text('Presente'), findsNothing);
+      expect(find.text('Marco Verdi'), findsOneWidget);
+    });
+
     testWidgets('l’appello di oggi è disponibile', (tester) async {
       await pumpApp(tester);
       await tester.tap(find.text('ALLENAMENTO DI OGGI'));

@@ -178,7 +178,7 @@ const updateRepo = 'PanRulez/teamcheck';
 
 /// Versione di questa build. Deve restare uguale a quella in pubspec.yaml:
 /// c'e' un test che fallisce se le due si scollano.
-const appVersion = '1.6.0';
+const appVersion = '1.7.0';
 
 enum UpdateStatus { upToDate, available, failed }
 
@@ -887,11 +887,12 @@ class _CalendarPageState extends State<CalendarPage> {
           sessionName: session.name,
           kids: roster,
           classes: classes,
+          // Una volta che l'elenco e' stato toccato per questa sessione,
+          // comanda quello: se ha tolto qualcuno non deve ricomparire.
           initialPlayerIds: List.of(
-            useFavoriteTeam
-                ? defaultPlayerIds
-                : selectedPlayers[session.id] ?? defaultPlayerIds,
+            selectedPlayers[session.id] ?? defaultPlayerIds,
           ),
+          basePlayerIds: defaultPlayerIds.toSet(),
           marks: Map.of(attendance[session.id] ?? {}),
           onChanged: (values) async {
             setState(() => attendance[session.id] = values);
@@ -1757,6 +1758,7 @@ class DayPage extends StatefulWidget {
     required this.kids,
     required this.classes,
     required this.initialPlayerIds,
+    required this.basePlayerIds,
     required this.marks,
     required this.onChanged,
     required this.onPlayersChanged,
@@ -1767,6 +1769,10 @@ class DayPage extends StatefulWidget {
   final List<Kid> kids;
   final List<FootballClass> classes;
   final List<String> initialPlayerIds;
+
+  /// I giocatori che questo appello ha per conto suo: quelli in piu' li ha
+  /// aggiunti l'allenatore, e vengono segnalati come tali.
+  final Set<String> basePlayerIds;
   final Map<String, Mark> marks;
   final Future<void> Function(Map<String, Mark>) onChanged;
   final Future<void> Function(List<String>) onPlayersChanged;
@@ -1780,7 +1786,28 @@ class _DayPageState extends State<DayPage> {
   late List<Kid> allPlayers = List.of(widget.kids);
   late Set<String> playerIds = Set.of(widget.initialPlayerIds);
 
+  /// Quanti giocatori di questa classe mancano ancora all'appello.
+  int missingFrom(FootballClass group) => allPlayers
+      .where(
+        (player) =>
+            player.classId == group.id && !playerIds.contains(player.id),
+      )
+      .length;
+
   Future<void> chooseOtherPlayers() async {
+    // La classe con cui sta gia' lavorando non gliela si propone: i suoi
+    // giocatori sono gia' tutti nell'appello.
+    final available = widget.classes
+        .where((group) => missingFrom(group) > 0)
+        .toList();
+    if (available.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tutti i giocatori sono già in questo appello.'),
+        ),
+      );
+      return;
+    }
     final classId = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
@@ -1789,11 +1816,12 @@ class _DayPageState extends State<DayPage> {
           width: double.maxFinite,
           child: ListView(
             shrinkWrap: true,
-            children: widget.classes
+            children: available
                 .map(
                   (group) => ListTile(
                     leading: const Icon(Icons.groups),
                     title: Text('Classe ${group.year}'),
+                    subtitle: Text('${missingFrom(group)} da aggiungere'),
                     onTap: () => Navigator.pop(context, group.id),
                   ),
                 )
@@ -1856,8 +1884,33 @@ class _DayPageState extends State<DayPage> {
       ),
     );
     if (confirm != true) return;
-    setState(() => playerIds = chosen);
+    // Se li aggiunge all'appello e' perche' sono venuti: segnarli presenti
+    // subito evita che restino senza segno e finiscano assenti nel report.
+    final added = chosen.difference(playerIds);
+    setState(() {
+      playerIds = chosen;
+      for (final id in added) {
+        marks[id] = Mark.present;
+      }
+    });
     await widget.onPlayersChanged(playerIds.toList());
+    if (added.isNotEmpty) await widget.onChanged(marks);
+  }
+
+  /// Toglie dall'appello uno aggiunto per sbaglio, con il suo segno: lasciare
+  /// il segno vorrebbe dire contarlo lo stesso nel report.
+  Future<void> removeFromRollCall(Kid player) async {
+    setState(() {
+      playerIds.remove(player.id);
+      marks.remove(player.id);
+    });
+    await widget.onPlayersChanged(playerIds.toList());
+    await widget.onChanged(marks);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${player.name} tolto da questo appello.')),
+      );
+    }
   }
 
   Future<void> registerPlayer() async {
@@ -1911,11 +1964,14 @@ class _DayPageState extends State<DayPage> {
     );
     if (confirm != true || classId == null || name.text.trim().isEmpty) return;
     final player = await widget.onRegisterPlayer(name.text, classId!);
+    // Lo registra perche' e' li' davanti: parte segnato presente.
     setState(() {
       allPlayers.add(player);
       playerIds.add(player.id);
+      marks[player.id] = Mark.present;
     });
     await widget.onPlayersChanged(playerIds.toList());
+    await widget.onChanged(marks);
   }
 
   List<Kid> get visiblePlayers =>
@@ -1945,35 +2001,56 @@ class _DayPageState extends State<DayPage> {
                   separatorBuilder: (_, _) => const SizedBox(height: 6),
                   itemBuilder: (_, i) {
                     final kid = visiblePlayers[i];
+                    final added = !widget.basePlayerIds.contains(kid.id);
                     return Card(
                       child: ListTile(
+                        contentPadding: const EdgeInsets.only(
+                          left: 16,
+                          right: 4,
+                        ),
                         leading: CircleAvatar(
                           child: Text(kid.name[0].toUpperCase()),
                         ),
-                        title: Text(kid.name),
-                        subtitle: kid.year.isEmpty
-                            ? null
-                            : Text('Nato nel ${kid.year}'),
-                        trailing: PopupMenuButton<Mark>(
-                          onSelected: (m) async {
-                            setState(() => marks[kid.id] = m);
-                            await widget.onChanged(marks);
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: Mark.present,
-                              child: Text('✓ Presente'),
+                        title: Text(
+                          kid.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: added
+                            ? const Text('Aggiunto a questo appello')
+                            : (kid.year.isEmpty
+                                  ? null
+                                  : Text('Nato nel ${kid.year}')),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            PopupMenuButton<Mark>(
+                              onSelected: (m) async {
+                                setState(() => marks[kid.id] = m);
+                                await widget.onChanged(marks);
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(
+                                  value: Mark.present,
+                                  child: Text('✓ Presente'),
+                                ),
+                                PopupMenuItem(
+                                  value: Mark.absent,
+                                  child: Text('✕ Assente'),
+                                ),
+                                PopupMenuItem(
+                                  value: Mark.justified,
+                                  child: Text('G Giustificato'),
+                                ),
+                              ],
+                              child: Status(marks[kid.id]),
                             ),
-                            PopupMenuItem(
-                              value: Mark.absent,
-                              child: Text('✕ Assente'),
-                            ),
-                            PopupMenuItem(
-                              value: Mark.justified,
-                              child: Text('G Giustificato'),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 24),
+                              tooltip: 'Togli da questo appello',
+                              onPressed: () => removeFromRollCall(kid),
                             ),
                           ],
-                          child: Status(marks[kid.id]),
                         ),
                       ),
                     );
