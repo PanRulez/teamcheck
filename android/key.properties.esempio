@@ -1,0 +1,11 @@
+# Modello per android/key.properties (che NON va messo in git).
+# Copia questo file in android/key.properties e metti la tua password.
+#
+# In formato PKCS12 la password della chiave e quella del keystore coincidono,
+# quindi storePassword e keyPassword sono uguali.
+# Usa le barre in avanti / anche su Windows, e niente spazi attorno all'=.
+
+storePassword=LA_TUA_PASSWORD
+keyPassword=LA_TUA_PASSWORD
+keyAlias=teamcheck
+storeFile=C:/Users/panif/Documents/chiavi-teamcheck/teamcheck-release.jks
