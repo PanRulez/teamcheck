@@ -82,25 +82,31 @@ Deve comparire il nome che hai messo tu, non `CN=Android Debug`.
 
 ## 3. Ogni aggiornamento successivo
 
-1. Alza il numero di versione in `pubspec.yaml`, per esempio:
-   `version: 1.2.1+4` → il numero dopo il `+` deve sempre crescere.
-2. `flutter build apk --release --target-platform android-arm64`
-3. Manda l'APK; babbo lo apre e tocca "Aggiorna".
-   **I dati restano**, perche' la firma e il nome pacchetto non cambiano.
+Il repo e' https://github.com/PanRulez/teamcheck e deve restare **pubblico**:
+l'app lo interroga senza credenziali, se diventa privato il controllo
+aggiornamenti smette di funzionare.
 
-## 4. Se vuoi che si aggiorni da solo (consigliato)
+1. Alza la versione in **due punti**, che devono restare uguali:
+   - `pubspec.yaml` → `version: 1.3.2+7` (il numero dopo il `+` sempre a salire)
+   - `lib/main.dart` → `const appVersion = '1.3.2';`
+   C'e' un test che fallisce se te ne dimentichi uno: `flutter test`.
+2. Compila:
+   ```bash
+   flutter build apk --release --target-platform android-arm64
+   ```
+3. Rinomina l'APK con la versione e pubblica la release:
+   ```bash
+   gh release create v1.3.2 TeamCheck-1.3.2.apk --title "TeamCheck 1.3.2" --notes "Cosa cambia"
+   ```
+   Il tag deve iniziare per `v` e l'allegato finire per `.apk`: l'app cerca
+   esattamente quelli.
 
-Cosi' non devi mandargli un file ogni volta:
+Da quel momento babbo apre **Impostazioni e backup → CONTROLLA
+AGGIORNAMENTI**, l'app gli dice che c'e' la versione nuova e gliela fa
+scaricare; lui apre il file e tocca AGGIORNA. Le presenze restano.
 
-1. Il repo git c'e' gia': pubblicalo su GitHub (anche privato) e carica ogni
-   APK come **Release**.
-2. Sul telefono di babbo installa **Obtainium** (open source, da F-Droid o
-   GitHub) e aggiungi l'URL del repo.
-3. Obtainium controlla le nuove release e gli propone l'aggiornamento con una
-   notifica: lui deve solo toccare "Installa".
-
-In alternativa, se non vuoi GitHub: carica l'APK sempre nello stesso file di
-Google Drive e mandagli il link una volta sola.
+Se preferisci non aspettare che lo faccia lui, mandagli il link della
+release su WhatsApp: e' lo stesso file.
 
 > Prima di mandargli un aggiornamento importante, fai fare a babbo un backup
 > da *Impostazioni e backup* → SALVA UNA COPIA.

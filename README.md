@@ -32,3 +32,9 @@ Per riempire l'app di dati finti durante le prove:
 ```bash
 flutter run --dart-define=LOAD_TEST_DATA=true
 ```
+
+## Aggiornamenti
+
+Le versioni si pubblicano come **release** di questo repo, con l'APK allegato:
+l'app le trova da sola (Impostazioni → CONTROLLA AGGIORNAMENTI). Il
+procedimento e' in [AGGIORNAMENTO.md](AGGIORNAMENTO.md).
