@@ -150,6 +150,34 @@ void main() {
       expect(locale.formatMonthYear(DateTime(2026, 9)), contains('settembre'));
     });
 
+    testWidgets('senza classe il calendario non inventa allenamenti', (
+      tester,
+    ) async {
+      await pumpApp(tester);
+      expect(find.byIcon(Icons.sports_soccer), findsNothing);
+      expect(
+        find.textContaining('Nessun allenamento sul calendario'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('GESTISCI GIOCATORI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI CLASSE'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '2017');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TORNA A CALENDARIO'));
+      await tester.pumpAndSettle();
+
+      // Creata la classe, i suoi giorni compaiono sul calendario.
+      expect(find.byIcon(Icons.sports_soccer), findsWidgets);
+      expect(
+        find.textContaining('Nessun allenamento sul calendario'),
+        findsNothing,
+      );
+    });
+
     testWidgets('i giorni si cambiano dalla classe', (tester) async {
       await pumpApp(tester);
       await tester.tap(find.text('GESTISCI GIOCATORI'));

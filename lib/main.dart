@@ -171,7 +171,7 @@ const updateRepo = 'PanRulez/teamcheck';
 
 /// Versione di questa build. Deve restare uguale a quella in pubspec.yaml:
 /// c'e' un test che fallisce se le due si scollano.
-const appVersion = '1.5.0';
+const appVersion = '1.5.1';
 
 enum UpdateStatus { upToDate, available, failed }
 
@@ -617,8 +617,9 @@ class _CalendarPageState extends State<CalendarPage> {
 
   /// I giorni fissi del calendario sono quelli della classe preferita: se un
   /// domani babbo prende una classe che si allena martedi' e giovedi', basta
-  /// cambiarli li'. Finche' non c'e' nessuna classe restano lunedi' e mercoledi'.
-  Set<int> get trainingDays => favoriteClass?.days ?? defaultTrainingDays;
+  /// cambiarli li'. Senza classe scelta non c'e' nessun giorno: segnare
+  /// allenamenti che nessuno ha mai inserito sarebbe una bugia.
+  Set<int> get trainingDays => favoriteClass?.days ?? const {};
   bool defaultTraining(DateTime day) =>
       inSeason(day) && trainingDays.contains(day.weekday);
   bool isMoved(DateTime day) => movedTraining.containsKey(key(day));
@@ -983,6 +984,35 @@ class _CalendarPageState extends State<CalendarPage> {
                 ),
               ),
             ),
+            // Senza classe scelta il calendario non ha giorni fissi, e un
+            // calendario vuoto sembra rotto: qui c'e' scritto cosa manca.
+            if (favoriteClass == null) ...[
+              const SizedBox(height: 12),
+              Card(
+                color: const Color(0xfffff0cc),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, size: 26),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          classes.isEmpty
+                              ? 'Nessun allenamento sul calendario: tocca '
+                                    'GESTISCI GIOCATORI e crea la tua classe '
+                                    'con i suoi giorni.'
+                              : 'Tocca la stella accanto alla classe che '
+                                    'alleni: il calendario seguirà i suoi '
+                                    'giorni.',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
