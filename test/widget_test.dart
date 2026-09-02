@@ -133,6 +133,23 @@ void main() {
       expect(find.text('Presenze San Frediano'), findsNothing);
     });
 
+    testWidgets('tutto in italiano, con la domenica in fondo', (tester) async {
+      await pumpApp(tester);
+      final locale = MaterialLocalizations.of(
+        tester.element(find.byType(CalendarPage)),
+      );
+      // Il calendario che esce da "sposta allenamento" prende da qui i nomi
+      // dei mesi, i tasti e da che giorno comincia la settimana.
+      expect(locale.cancelButtonLabel, 'Annulla');
+      expect(locale.firstDayOfWeekIndex, 1, reason: 'la settimana inizia di lunedì, quindi la domenica va in fondo');
+      // narrowWeekdays parte sempre da domenica: e' firstDayOfWeekIndex a
+      // dire da dove il calendario comincia a leggerla.
+      final first = locale.firstDayOfWeekIndex;
+      expect(locale.narrowWeekdays[first], 'L');
+      expect(locale.narrowWeekdays[(first + 6) % 7], 'D');
+      expect(locale.formatMonthYear(DateTime(2026, 9)), contains('settembre'));
+    });
+
     testWidgets('i giorni si cambiano dalla classe', (tester) async {
       await pumpApp(tester);
       await tester.tap(find.text('GESTISCI GIOCATORI'));
