@@ -41,13 +41,40 @@ class Kid {
   );
 }
 
+/// Giorni di una classe appena creata: lunedi' e mercoledi', gli stessi che
+/// prima erano scritti nel codice come se valessero per tutti.
+const defaultTrainingDays = {DateTime.monday, DateTime.wednesday};
+
+const shortDayNames = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
+
+/// Elenco dei giorni in chiaro, per i sottotitoli: "Lun, Mer".
+String daysLabel(Set<int> days) {
+  if (days.isEmpty) return 'nessun giorno fisso';
+  final sorted = days.toList()..sort();
+  return sorted.map((day) => shortDayNames[day - 1]).join(', ');
+}
+
 class FootballClass {
-  FootballClass(this.id, this.year);
+  FootballClass(this.id, this.year, {Set<int>? days})
+    : days = {...(days ?? defaultTrainingDays)};
   final String id;
   final String year;
-  Map<String, dynamic> json() => {'id': id, 'year': year};
-  factory FootballClass.from(Map<String, dynamic> value) =>
-      FootballClass(value['id'] as String, value['year'] as String);
+
+  /// Giorni della settimana (lunedi' = 1) in cui questa classe si allena:
+  /// sono suoi, un'altra classe puo' allenarsi martedi' e giovedi'.
+  Set<int> days;
+  Map<String, dynamic> json() => {
+    'id': id,
+    'year': year,
+    'days': days.toList()..sort(),
+  };
+  factory FootballClass.from(Map<String, dynamic> value) => FootballClass(
+    value['id'] as String,
+    value['year'] as String,
+    // Le classi salvate prima che i giorni esistessero tengono lunedi' e
+    // mercoledi', cosi' sul telefono di babbo non cambia niente.
+    days: (value['days'] as List?)?.map((day) => day as int).toSet(),
+  );
 }
 
 enum Mark { present, absent, justified }
@@ -133,7 +160,7 @@ const updateRepo = 'PanRulez/teamcheck';
 
 /// Versione di questa build. Deve restare uguale a quella in pubspec.yaml:
 /// c'e' un test che fallisce se le due si scollano.
-const appVersion = '1.3.1';
+const appVersion = '1.4.0';
 
 enum UpdateStatus { upToDate, available, failed }
 
@@ -568,9 +595,21 @@ class _CalendarPageState extends State<CalendarPage> {
   );
   bool inSeason(DateTime day) =>
       !day.isBefore(seasonStart) && day.isBefore(seasonEnd);
+
+  /// La classe che babbo allena, quella con la stella.
+  FootballClass? get favoriteClass {
+    for (final group in classes) {
+      if (group.id == favoriteClassId) return group;
+    }
+    return null;
+  }
+
+  /// I giorni fissi del calendario sono quelli della classe preferita: se un
+  /// domani babbo prende una classe che si allena martedi' e giovedi', basta
+  /// cambiarli li'. Finche' non c'e' nessuna classe restano lunedi' e mercoledi'.
+  Set<int> get trainingDays => favoriteClass?.days ?? defaultTrainingDays;
   bool defaultTraining(DateTime day) =>
-      inSeason(day) &&
-      (day.weekday == DateTime.monday || day.weekday == DateTime.wednesday);
+      inSeason(day) && trainingDays.contains(day.weekday);
   bool isMoved(DateTime day) => movedTraining.containsKey(key(day));
   bool isTraining(DateTime day) =>
       inSeason(day) &&
@@ -730,10 +769,11 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   Future<void> openRollCall(DateTime date, TrainingOption session) async {
+    // Nei giorni della sua classe l'appello si apre gia' con i suoi giocatori.
     final useFavoriteTeam =
         session.id == key(date) &&
         favoriteClassId != null &&
-        (date.weekday == DateTime.monday || date.weekday == DateTime.wednesday);
+        trainingDays.contains(date.weekday);
     final defaultPlayerIds = useFavoriteTeam
         ? kids
               .where((player) => player.classId == favoriteClassId)
@@ -1857,9 +1897,16 @@ class _ClassesPageState extends State<ClassesPage> {
       return;
     }
     setState(
-      () => groups.add(
-        FootballClass('class-${DateTime.now().microsecondsSinceEpoch}', value),
-      ),
+      () {
+        final footballClass = FootballClass(
+          'class-${DateTime.now().microsecondsSinceEpoch}',
+          value,
+        );
+        groups.add(footballClass);
+        // La prima classe diventa quella di babbo: e' la sua a dettare i
+        // giorni del calendario, e senza stella non ne detterebbe nessuna.
+        favoriteClassId ??= footballClass.id;
+      },
     );
     await persist();
   }
@@ -1869,9 +1916,14 @@ class _ClassesPageState extends State<ClassesPage> {
     MaterialPageRoute(
       builder: (_) => ClassPlayersPage(
         footballClass: footballClass,
+        isFavorite: favoriteClassId == footballClass.id,
         players: players
             .where((player) => player.classId == footballClass.id)
             .toList(),
+        onDaysChanged: (days) async {
+          setState(() => footballClass.days = days);
+          await persist();
+        },
         onSave: (classPlayers) async {
           setState(() {
             players.removeWhere((player) => player.classId == footballClass.id);
@@ -1924,7 +1976,7 @@ class _ClassesPageState extends State<ClassesPage> {
                           .length;
                       final isFavorite = favoriteClassId == group.id;
                       return SizedBox(
-                        height: 76,
+                        height: 96,
                         child: Row(
                           children: [
                             Expanded(
@@ -1949,6 +2001,14 @@ class _ClassesPageState extends State<ClassesPage> {
                                       isFavorite
                                           ? '$count giocatori • PREFERITA'
                                           : '$count giocatori',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      'Allena: ${daysLabel(group.days)}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 12),
                                     ),
                                   ],
                                 ),
@@ -1997,13 +2057,17 @@ class ClassPlayersPage extends StatefulWidget {
   const ClassPlayersPage({
     super.key,
     required this.footballClass,
+    required this.isFavorite,
     required this.players,
     required this.onSave,
+    required this.onDaysChanged,
     required this.onDelete,
   });
   final FootballClass footballClass;
+  final bool isFavorite;
   final List<Kid> players;
   final Future<void> Function(List<Kid>) onSave;
+  final Future<void> Function(Set<int>) onDaysChanged;
   final Future<void> Function() onDelete;
 
   @override
@@ -2012,7 +2076,67 @@ class ClassPlayersPage extends StatefulWidget {
 
 class _ClassPlayersPageState extends State<ClassPlayersPage> {
   late List<Kid> list = List.of(widget.players);
+  late Set<int> days = Set.of(widget.footballClass.days);
   Future<void> persist() => widget.onSave(list);
+
+  Future<void> toggleDay(int day, bool selected) async {
+    setState(() {
+      if (selected) {
+        days.add(day);
+      } else {
+        days.remove(day);
+      }
+    });
+    await widget.onDaysChanged(Set.of(days));
+  }
+
+  Widget daysPicker(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Giorni di allenamento',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (var day = DateTime.monday; day <= DateTime.sunday; day++)
+              FilterChip(
+                label: Text(
+                  shortDayNames[day - 1],
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                showCheckmark: false,
+                selected: days.contains(day),
+                onSelected: (selected) => toggleDay(day, selected),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          widget.isFavorite
+              ? 'Il calendario segue questi giorni, perché è la classe scelta '
+                    'come preferita.'
+              : 'Il calendario segue i giorni della classe con la stella, non '
+                    'questi.',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const Divider(height: 26),
+      ],
+    ),
+  );
 
   Future<void> deleteClass() async {
     final confirm = await showDialog<bool>(
@@ -2093,6 +2217,7 @@ class _ClassPlayersPageState extends State<ClassPlayersPage> {
     body: SafeArea(
       child: Column(
         children: [
+          daysPicker(context),
           Expanded(
             child: list.isEmpty
                 ? const Center(

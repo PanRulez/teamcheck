@@ -57,6 +57,25 @@ void main() {
     });
   });
 
+  group('giorni della classe', () {
+    test('una classe salvata prima dei giorni tiene lunedì e mercoledì', () {
+      final vecchia = FootballClass.from({'id': 'c1', 'year': '2017'});
+      expect(vecchia.days, defaultTrainingDays);
+    });
+
+    test('i giorni scelti sopravvivono al salvataggio', () {
+      final classe = FootballClass('c1', '2018', days: {2, 4});
+      final riletta = FootballClass.from(classe.json());
+      expect(riletta.days, {DateTime.tuesday, DateTime.thursday});
+    });
+
+    test('l’elenco dei giorni si legge in chiaro', () {
+      expect(daysLabel({3, 1}), 'Lun, Mer');
+      expect(daysLabel({2, 4}), 'Mar, Gio');
+      expect(daysLabel({}), 'nessun giorno fisso');
+    });
+  });
+
   group('app', () {
     Future<void> pumpApp(WidgetTester tester) async {
       tester.view.physicalSize = const Size(1080, 2340);
@@ -112,6 +131,31 @@ void main() {
 
       expect(find.text('Allenatore Mario Rossi'), findsOneWidget);
       expect(find.text('Presenze San Frediano'), findsNothing);
+    });
+
+    testWidgets('i giorni si cambiano dalla classe', (tester) async {
+      await pumpApp(tester);
+      await tester.tap(find.text('GESTISCI GIOCATORI'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('AGGIUNGI CLASSE'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '2017');
+      await tester.tap(find.text('AGGIUNGI'));
+      await tester.pumpAndSettle();
+
+      // La prima classe prende la stella e parte con lunedì e mercoledì.
+      expect(find.text('0 giocatori • PREFERITA'), findsOneWidget);
+      expect(find.text('Allena: Lun, Mer'), findsOneWidget);
+
+      await tester.tap(find.text('Classe 2017'));
+      await tester.pumpAndSettle();
+      expect(find.text('Giorni di allenamento'), findsOneWidget);
+      await tester.tap(find.text('Mar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TORNA A CLASSI'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Allena: Lun, Mar, Mer'), findsOneWidget);
     });
 
     testWidgets('l’appello di oggi è disponibile', (tester) async {
